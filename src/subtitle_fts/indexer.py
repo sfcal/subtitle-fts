@@ -29,6 +29,12 @@ SRT_TS_RE = re.compile(
 # TV path pattern: .../tv/Show Name/Season 01/Show Name - S01E02 - Title.srt
 TV_SEASON_EP_RE = re.compile(r"[Ss](\d{1,2})[Ee](\d{1,3})")
 
+# Language code mapping from filename suffix to display name
+LANG_MAP = {
+    "eng": "english", "en": "english",
+    "fre": "french", "fra": "french", "fr": "french",
+}
+
 
 def meili_headers() -> dict:
     headers = {"Content-Type": "application/json"}
@@ -59,13 +65,14 @@ def configure_index() -> None:
                 "id",
                 "title",
                 "media_type",
+                "language",
                 "season",
                 "episode",
                 "file_path",
                 "content",
                 "timestamps",
             ],
-            "filterableAttributes": ["media_type", "season", "episode"],
+            "filterableAttributes": ["media_type", "language", "season", "episode"],
             "sortableAttributes": ["title"],
         },
     )
@@ -119,8 +126,17 @@ def parse_srt(text: str) -> tuple[str, list[dict]]:
     return " ".join(lines), timestamps
 
 
+def extract_language(path: Path) -> str:
+    """Extract language from filename suffixes like .eng.srt or .en.hi.srt."""
+    suffixes = [s.lstrip(".").lower() for s in path.suffixes[:-1]]  # exclude .srt
+    for suffix in suffixes:
+        if suffix in LANG_MAP:
+            return LANG_MAP[suffix]
+    return "unknown"
+
+
 def extract_metadata(path: Path) -> dict:
-    """Extract title, media_type, season, and episode from file path."""
+    """Extract title, media_type, language, season, and episode from file path."""
     rel = path.relative_to(MEDIA_PATH)
     parts = rel.parts
 
@@ -128,6 +144,7 @@ def extract_metadata(path: Path) -> dict:
     season = None
     episode = None
     title = path.stem
+    language = extract_language(path)
 
     if len(parts) >= 1 and parts[0].lower() == "tv":
         media_type = "tv"
@@ -147,6 +164,7 @@ def extract_metadata(path: Path) -> dict:
         "title": title,
         "season": season,
         "episode": episode,
+        "language": language,
     }
 
 
@@ -239,6 +257,7 @@ def run_index_cycle() -> None:
                 "id": file_id(path),
                 "title": meta["title"],
                 "media_type": meta["media_type"],
+                "language": meta["language"],
                 "season": meta["season"],
                 "episode": meta["episode"],
                 "file_path": path_str,
