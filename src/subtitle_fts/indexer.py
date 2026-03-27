@@ -181,9 +181,12 @@ def scan_srt_files() -> dict[str, float]:
     return found
 
 
-def index_files(new_files: list[str]) -> list[dict]:
-    """Parse and build MeiliSearch documents for a list of file paths."""
-    docs = []
+def index_and_push(new_files: list[str], state: dict, current: dict) -> None:
+    """Parse SRT files in chunks and push to MeiliSearch incrementally."""
+    headers = meili_headers()
+    batch = []
+    total_pushed = 0
+
     for path_str in new_files:
         path = Path(path_str)
         text = read_srt(path)
@@ -195,7 +198,7 @@ def index_files(new_files: list[str]) -> list[dict]:
             continue
 
         meta = extract_metadata(path)
-        docs.append(
+        batch.append(
             {
                 "id": file_id(path),
                 "title": meta["title"],
@@ -207,21 +210,36 @@ def index_files(new_files: list[str]) -> list[dict]:
                 "timestamps": timestamps,
             }
         )
-    return docs
 
+        if len(batch) >= BATCH_SIZE:
+            resp = requests.post(
+                f"{MEILI_URL}/indexes/{INDEX_NAME}/documents",
+                headers=headers,
+                json=batch,
+            )
+            resp.raise_for_status()
+            total_pushed += len(batch)
+            log.info("pushed %d documents", total_pushed)
+            # Update state for pushed files so progress survives crashes
+            for doc in batch:
+                state[doc["file_path"]] = current[doc["file_path"]]
+            save_state(state)
+            batch.clear()
 
-def push_documents(docs: list[dict]) -> None:
-    """Send documents to MeiliSearch in batches."""
-    headers = meili_headers()
-    for i in range(0, len(docs), BATCH_SIZE):
-        batch = docs[i : i + BATCH_SIZE]
+    # Push remaining
+    if batch:
         resp = requests.post(
             f"{MEILI_URL}/indexes/{INDEX_NAME}/documents",
             headers=headers,
             json=batch,
         )
         resp.raise_for_status()
-        log.info("pushed batch %d–%d", i, i + len(batch))
+        total_pushed += len(batch)
+        for doc in batch:
+            state[doc["file_path"]] = current[doc["file_path"]]
+        save_state(state)
+
+    log.info("finished pushing %d documents total", total_pushed)
 
 
 def delete_documents(ids: list[str]) -> None:
@@ -260,16 +278,16 @@ def run_index_cycle() -> None:
     )
 
     if new_or_modified:
-        docs = index_files(new_or_modified)
-        if docs:
-            push_documents(docs)
+        index_and_push(new_or_modified, state, current)
 
     if deleted:
         stale_ids = [file_id(Path(p)) for p in deleted]
         delete_documents(stale_ids)
+        for p in deleted:
+            state.pop(p, None)
+        save_state(state)
 
-    save_state(current)
-    log.info("index cycle complete — %d files tracked", len(current))
+    log.info("index cycle complete — %d files tracked", len(state))
 
 
 def main() -> None:
