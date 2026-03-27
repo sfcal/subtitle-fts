@@ -19,7 +19,7 @@ MEDIA_PATH = Path(os.environ.get("MEDIA_PATH", "/media"))
 INDEX_INTERVAL = int(os.environ.get("INDEX_INTERVAL", "21600"))
 STATE_FILE = Path(os.environ.get("STATE_FILE", "/data/index_state.json"))
 INDEX_NAME = "subtitles"
-BATCH_SIZE = 100
+BATCH_SIZE = 20
 
 # SRT timestamp pattern: 00:01:23,456 --> 00:01:25,789
 SRT_TS_RE = re.compile(
@@ -184,6 +184,7 @@ def push_batch(batch: list[dict]) -> None:
         f"{MEILI_URL}/indexes/{INDEX_NAME}/documents",
         headers=meili_headers(),
         json=batch,
+        timeout=120,
     )
     resp.raise_for_status()
 
@@ -294,13 +295,15 @@ def main() -> None:
 
     configure_index()
 
+    RETRY_DELAY = 60
     while True:
         try:
             run_index_cycle()
+            log.info("sleeping %ds until next cycle", INDEX_INTERVAL)
+            time.sleep(INDEX_INTERVAL)
         except Exception:
-            log.exception("index cycle failed")
-        log.info("sleeping %ds until next cycle", INDEX_INTERVAL)
-        time.sleep(INDEX_INTERVAL)
+            log.exception("index cycle failed, retrying in %ds", RETRY_DELAY)
+            time.sleep(RETRY_DELAY)
 
 
 if __name__ == "__main__":
